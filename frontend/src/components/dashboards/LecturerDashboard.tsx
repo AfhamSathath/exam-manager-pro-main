@@ -1,75 +1,161 @@
-import { useAuth } from '@/contexts/AuthContext';
-import { getPapersByLecturer } from '@/lib/storage';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { FileText, Send, CheckCircle, Clock, AlertCircle } from 'lucide-react';
-import { Link } from 'react-router-dom';
-import { Button } from '@/components/ui/button';
+// frontend/src/components/dashboards/LecturerDashboard.tsx
+import { useEffect, useState } from "react";
+import { useAuth } from "@/contexts/AuthContext";
+import { useLocation, Link } from "react-router-dom";
+import axios from "axios";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { FileText, CheckCircle, Clock, AlertCircle } from "lucide-react";
+import StatusBadge from "@/components/StatusBadge";
+import { Year, Semester } from "@/types";
+
+const API_URL = "http://localhost:5001/api/papers";
+
+interface Paper {
+  lecturerId: string;
+  _id: string;
+  courseName: string;
+  year: Year;
+  semester: Semester;
+  status: string;
+  createdAt: string;
+}
 
 const LecturerDashboard = () => {
-  const { user } = useAuth();
-  const papers = user ? getPapersByLecturer(user.id) : [];
+  const { user, token } = useAuth();
+  const location = useLocation();
 
+  const [papers, setPapers] = useState<Paper[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshFlag, setRefreshFlag] = useState(false);
+
+  // Refresh dashboard after navigation
+  useEffect(() => {
+    if (location.state?.refresh) {
+      setRefreshFlag((prev) => !prev);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
+
+  // Fetch papers from API
+  useEffect(() => {
+    if (!user || !token) return;
+
+    const fetchPapers = async () => {
+      setLoading(true);
+      try {
+        const res = await axios.get(API_URL, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const lecturerPapers = res.data.filter(
+          (p: Paper) => String(p.lecturerId) === String(user.id)
+        );
+        lecturerPapers.sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        setPapers(lecturerPapers);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPapers();
+  }, [user, token, refreshFlag]);
+
+  // Define status categories
+  const pendingStatuses = ["draft", "revision_required"]; // waiting for lecturer action
+  const inProgressStatuses = ["pending_moderation", "pending_approval"]; // submitted, waiting for approval
+  const approvedStatuses = ["approved", "printed"]; // fully approved
+
+  // Stats
   const stats = {
     total: papers.length,
-    draft: papers.filter(p => p.status === 'draft').length,
-    pending: papers.filter(p => p.status === 'pending_moderation').length,
-    revisionRequired: papers.filter(p => p.status === 'revision_required').length,
-    approved: papers.filter(p => p.status === 'approved' || p.status === 'printed').length,
+    pending: papers.filter((p) => pendingStatuses.includes(p.status)).length,
+    inProgress: papers.filter((p) => inProgressStatuses.includes(p.status)).length,
+    approved: papers.filter((p) => approvedStatuses.includes(p.status)).length,
   };
 
-  const recentPapers = papers.slice(-5).reverse();
+  const recentPapers = papers.slice(0, 5);
+
+  // Submit paper: moves from draft/revision_required → pending_moderation
+  const handleSubmit = async (paperId: string) => {
+    try {
+      await axios.patch(
+        `${API_URL}/${paperId}/submit`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      // Optimistically update the paper status in UI
+      setPapers((prev) =>
+        prev.map((p) =>
+          p._id === paperId ? { ...p, status: "pending_moderation" } : p
+        )
+      );
+    } catch (err) {
+      console.error("Failed to submit paper", err);
+    }
+  };
+
+  if (loading)
+    return (
+      <div className="text-center py-10 text-muted-foreground">
+        Loading dashboard...
+      </div>
+    );
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Welcome back, {user?.fullName}</h1>
+          <h1 className="text-3xl font-bold">Welcome back, {user?.fullName}</h1>
           <p className="text-muted-foreground mt-1">Manage your examination papers</p>
         </div>
         <Link to="/dashboard/create-paper">
-          <Button className="bg-gradient-primary hover:opacity-90">
-            <FileText className="w-4 h-4 mr-2" />
-            Create New Paper
+          <Button>
+            <FileText className="w-4 h-4 mr-2" /> Create Paper
           </Button>
         </Link>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="border-l-4 border-l-primary">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Total Papers</CardTitle>
-            <FileText className="h-5 w-5 text-primary" />
+      {/* Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="flex justify-between items-center pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Total Papers</CardTitle>
+            <FileText className="w-5 h-5 text-primary" />
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">{stats.total}</div>
           </CardContent>
         </Card>
 
-        <Card className="border-l-4 border-l-warning">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Pending Review</CardTitle>
-            <Clock className="h-5 w-5 text-warning" />
+        <Card>
+          <CardHeader className="flex justify-between items-center pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Pending</CardTitle>
+            <Clock className="w-5 h-5 text-warning" />
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">{stats.pending}</div>
           </CardContent>
         </Card>
 
-        <Card className="border-l-4 border-l-destructive">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Needs Revision</CardTitle>
-            <AlertCircle className="h-5 w-5 text-destructive" />
+        <Card>
+          <CardHeader className="flex justify-between items-center pb-2">
+            <CardTitle className="text-sm text-muted-foreground">In Progress</CardTitle>
+            <AlertCircle className="w-5 h-5 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold">{stats.revisionRequired}</div>
+            <div className="text-3xl font-bold">{stats.inProgress}</div>
           </CardContent>
         </Card>
 
-        <Card className="border-l-4 border-l-success">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Approved</CardTitle>
-            <CheckCircle className="h-5 w-5 text-success" />
+        <Card>
+          <CardHeader className="flex justify-between items-center pb-2">
+            <CardTitle className="text-sm text-muted-foreground">Approved</CardTitle>
+            <CheckCircle className="w-5 h-5 text-success" />
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">{stats.approved}</div>
@@ -84,90 +170,36 @@ const LecturerDashboard = () => {
         </CardHeader>
         <CardContent>
           {recentPapers.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>No papers yet. Create your first examination paper!</p>
-              <Link to="/dashboard/create-paper">
-                <Button variant="link" className="mt-2">Create Paper</Button>
-              </Link>
-            </div>
+            <p className="text-muted-foreground text-center py-6">
+              No papers created yet
+            </p>
           ) : (
-            <div className="space-y-3">
-              {recentPapers.map((paper) => (
-                <Link
-                  key={paper.id}
-                  to={`/dashboard/papers/${paper.id}`}
-                  className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/50 transition-colors"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                      <FileText className="w-5 h-5 text-primary" />
-                    </div>
-                    <div>
-                      <p className="font-medium">{paper.courseCode} - {paper.courseName}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {paper.year} • {paper.semester}
-                      </p>
-                    </div>
-                  </div>
+            recentPapers.map((paper) => (
+              <div
+                key={paper._id}
+                className="flex justify-between items-center p-4 border rounded-lg hover:bg-muted/40 transition"
+              >
+                <div>
+                  <p className="font-medium">{paper.courseName}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {paper.year} • {paper.semester}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {pendingStatuses.includes(paper.status) && (
+                    <Button size="sm" onClick={() => handleSubmit(paper._id)}>
+                      Submit
+                    </Button>
+                  )}
                   <StatusBadge status={paper.status} />
-                </Link>
-              ))}
-            </div>
+                </div>
+              </div>
+            ))
           )}
         </CardContent>
       </Card>
     </div>
-  );
-};
-
-const StatusBadge = ({ status }: { status: string }) => {
-  const getStatusStyles = () => {
-    switch (status) {
-      case 'draft':
-        return 'bg-muted text-muted-foreground';
-      case 'pending_moderation':
-        return 'bg-warning/10 text-warning';
-      case 'moderated':
-        return 'bg-info/10 text-info';
-      case 'revision_required':
-        return 'bg-destructive/10 text-destructive';
-      case 'pending_approval':
-        return 'bg-warning/10 text-warning';
-      case 'approved':
-        return 'bg-success/10 text-success';
-      case 'printed':
-        return 'bg-success/10 text-success';
-      default:
-        return 'bg-muted text-muted-foreground';
-    }
-  };
-
-  const getStatusLabel = () => {
-    switch (status) {
-      case 'draft':
-        return 'Draft';
-      case 'pending_moderation':
-        return 'Pending Review';
-      case 'moderated':
-        return 'Moderated';
-      case 'revision_required':
-        return 'Revision Required';
-      case 'pending_approval':
-        return 'Pending Approval';
-      case 'approved':
-        return 'Approved';
-      case 'printed':
-        return 'Printed';
-      default:
-        return status;
-    }
-  };
-
-  return (
-    <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusStyles()}`}>
-      {getStatusLabel()}
-    </span>
   );
 };
 

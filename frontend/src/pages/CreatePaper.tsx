@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+// frontend/src/pages/CreatePaper.tsx
+import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -11,21 +11,27 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { FileText, Send, Save, Calendar, BookOpen } from "lucide-react";
 import axios from "axios";
 import { COURSES, YEARS, SEMESTERS, Year, Semester, PaperType } from "@/types";
+import StatusBadge from "@/components/StatusBadge";
 
 const API_URL = "http://localhost:5001/api/papers";
 
 const CreatePaper = () => {
-  const navigate = useNavigate();
-  const { user, token } = useAuth(); // token is JWT from AuthContext
-
+  const { user, token } = useAuth();
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [papers, setPapers] = useState<any[]>([]);
   const [formData, setFormData] = useState({
     year: "" as Year,
     semester: "" as Semester,
@@ -34,21 +40,45 @@ const CreatePaper = () => {
   });
 
   const filteredCourses = COURSES.filter(
-    c =>
+    (c) =>
       c.department === user?.department &&
       c.year === formData.year &&
       c.semester === formData.semester
   );
 
-  const selectedCourse = COURSES.find(c => c.code === formData.courseCode);
+  const selectedCourse = COURSES.find((c) => c.code === formData.courseCode);
+
+  useEffect(() => {
+    if (!user) return;
+    const fetchPapers = async () => {
+      try {
+        const res = await axios.get(API_URL, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const lecturerPapers = res.data.filter((p: any) => p.lecturerId === user.id);
+        setPapers(lecturerPapers);
+      } catch (err) {
+        console.error("Failed to fetch papers:", err);
+      }
+    };
+    fetchPapers();
+  }, [user, token]);
 
   const validate = () => {
+    if (!formData.year || !formData.semester) {
+      toast.error("Please select year and semester");
+      return false;
+    }
     if (!selectedCourse) {
       toast.error("Please select a course");
       return false;
     }
     if (!pdfFile) {
       toast.error("Please upload a PDF file");
+      return false;
+    }
+    if (!user) {
+      toast.error("User not authenticated");
       return false;
     }
     return true;
@@ -59,30 +89,33 @@ const CreatePaper = () => {
     setIsSubmitting(true);
 
     try {
-      const formPayload = new FormData();
-      formPayload.append("year", formData.year);
-      formPayload.append("semester", formData.semester);
-      formPayload.append("courseCode", selectedCourse!.code);
-      formPayload.append("courseName", selectedCourse!.name);
-      formPayload.append("paperType", formData.paperType);
-      formPayload.append("department", user!.department);
-      formPayload.append("lecturerId", user!.id);
-      formPayload.append("lecturerName", user!.fullName);
-      formPayload.append("status", status);
-      formPayload.append("pdf", pdfFile!);
+      const payload = new FormData();
+      payload.append("year", formData.year);
+      payload.append("semester", formData.semester);
+      payload.append("courseName", selectedCourse!.name);
+      payload.append("paperType", formData.paperType);
+      payload.append("pdf", pdfFile!);
+      payload.append("status", status);
 
-      await axios.post(API_URL, formPayload, {
+      const res = await axios.post(API_URL, payload, {
         headers: {
           "Content-Type": "multipart/form-data",
           Authorization: `Bearer ${token}`,
         },
       });
 
-      toast.success(
-        status === "draft" ? "Draft saved!" : "Submitted for review!"
-      );
-      navigate("/dashboard/papers");
+      toast.success(status === "draft" ? "Draft saved!" : "Submitted for review!");
+      setPapers((prev) => [res.data, ...prev]);
+
+      setFormData({
+        year: "" as Year,
+        semester: "" as Semester,
+        courseCode: "",
+        paperType: "exam" as PaperType,
+      });
+      setPdfFile(null);
     } catch (err: any) {
+      console.error("CreatePaper Error:", err);
       toast.error(err.response?.data?.message || "Failed to upload paper");
     } finally {
       setIsSubmitting(false);
@@ -92,25 +125,22 @@ const CreatePaper = () => {
   return (
     <DashboardLayout>
       <div className="max-w-4xl mx-auto space-y-6">
+        {/* Form */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <FileText className="w-5 h-5" /> Create Paper (PDF Only)
             </CardTitle>
-            <CardDescription>
-              Upload examination or assessment paper as PDF
-            </CardDescription>
+            <CardDescription>Upload examination or assessment paper</CardDescription>
           </CardHeader>
-
           <CardContent className="space-y-6">
-            {/* Year & Semester */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <Label>Academic Year</Label>
                 <Select
                   value={formData.year}
-                  onValueChange={(value: Year) =>
-                    setFormData({ ...formData, year: value, courseCode: "" })
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, year: value as Year, courseCode: "" })
                   }
                 >
                   <SelectTrigger>
@@ -118,85 +148,82 @@ const CreatePaper = () => {
                     <SelectValue placeholder="Select year" />
                   </SelectTrigger>
                   <SelectContent>
-                    {YEARS.map(y => (
-                      <SelectItem key={y} value={y}>{y}</SelectItem>
+                    {YEARS.map((y) => (
+                      <SelectItem key={y} value={y}>
+                        {y}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-
               <div>
                 <Label>Semester</Label>
                 <Select
                   value={formData.semester}
                   disabled={!formData.year}
-                  onValueChange={(value: Semester) =>
-                    setFormData({ ...formData, semester: value, courseCode: "" })
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, semester: value as Semester, courseCode: "" })
                   }
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select semester" />
                   </SelectTrigger>
                   <SelectContent>
-                    {SEMESTERS.map(s => (
-                      <SelectItem key={s} value={s}>{s}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {/* Course & Type */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label>Course</Label>
-                <Select
-                  value={formData.courseCode}
-                  disabled={!formData.year || !formData.semester}
-                  onValueChange={value =>
-                    setFormData({ ...formData, courseCode: value })
-                  }
-                >
-                  <SelectTrigger>
-                    <BookOpen className="w-4 h-4 mr-2" />
-                    <SelectValue placeholder="Select course" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {filteredCourses.map(c => (
-                      <SelectItem key={c.code} value={c.code}>
-                        {c.code} - {c.name}
+                    {SEMESTERS.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-
-              <div>
-                <Label>Paper Type</Label>
-                <Select
-                  value={formData.paperType}
-                  onValueChange={value =>
-                    setFormData({ ...formData, paperType: value as PaperType })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="exam">Examination</SelectItem>
-                    <SelectItem value="assessment">Assessment</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
             </div>
 
-            {/* PDF Upload */}
+            <div>
+              <Label>Course</Label>
+              <Select
+                value={formData.courseCode}
+                disabled={!formData.year || !formData.semester}
+                onValueChange={(value) => setFormData({ ...formData, courseCode: value })}
+              >
+                <SelectTrigger>
+                  <BookOpen className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="Select course" />
+                </SelectTrigger>
+                <SelectContent>
+                  {filteredCourses.map((c) => (
+                    <SelectItem key={c.code} value={c.code}>
+                      {c.code} - {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label>Paper Type</Label>
+              <Select
+                value={formData.paperType}
+                onValueChange={(value) =>
+                  setFormData({ ...formData, paperType: value as PaperType })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="exam">Examination</SelectItem>
+                  <SelectItem value="assessment">Assessment</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <div>
               <Label>Upload PDF</Label>
               <Input
                 type="file"
                 accept="application/pdf"
-                onChange={e => e.target.files && setPdfFile(e.target.files[0])}
+                onChange={(e) => e.target.files && setPdfFile(e.target.files[0])}
               />
               {pdfFile && (
                 <p className="text-xs text-muted-foreground mt-1">
@@ -205,7 +232,6 @@ const CreatePaper = () => {
               )}
             </div>
 
-            {/* Actions */}
             <div className="flex gap-4 pt-4">
               <Button
                 variant="outline"
@@ -215,7 +241,6 @@ const CreatePaper = () => {
               >
                 <Save className="w-4 h-4 mr-2" /> Save Draft
               </Button>
-
               <Button
                 onClick={() => handleSubmit("pending_moderation")}
                 className="flex-1"
@@ -224,6 +249,38 @@ const CreatePaper = () => {
                 <Send className="w-4 h-4 mr-2" /> Submit for Review
               </Button>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Live Paper List */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Your Papers</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {papers.length === 0 ? (
+              <p className="text-muted-foreground">No papers yet.</p>
+            ) : (
+              papers.map((paper) => (
+                <div
+                  key={paper._id}
+                  className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/50 transition-colors"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                      <FileText className="w-5 h-5 text-primary" />
+                    </div>
+                    <div>
+                      <p className="font-medium">{paper.courseName}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {paper.year} • {paper.semester}
+                      </p>
+                    </div>
+                  </div>
+                  <StatusBadge status={paper.status} />
+                </div>
+              ))
+            )}
           </CardContent>
         </Card>
       </div>

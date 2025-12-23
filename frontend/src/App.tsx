@@ -1,3 +1,4 @@
+// frontend/src/App.tsx
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -22,9 +23,15 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
+/**
+ * ProtectedRoute waits for auth to restore before rendering
+ */
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated } = useAuth();
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" />;
+  const { isAuthenticated, user } = useAuth();
+
+  if (user === undefined) return <div>Loading...</div>; // optional spinner
+
+  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
 };
 
 const AppRoutes = () => (
@@ -32,6 +39,7 @@ const AppRoutes = () => (
     <Route path="/" element={<Index />} />
     <Route path="/login" element={<Login />} />
     <Route path="/register" element={<Register />} />
+
     <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
     <Route path="/dashboard/create-paper" element={<ProtectedRoute><CreatePaper /></ProtectedRoute>} />
     <Route path="/dashboard/papers" element={<ProtectedRoute><MyPapers /></ProtectedRoute>} />

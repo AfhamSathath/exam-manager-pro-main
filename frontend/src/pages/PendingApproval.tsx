@@ -1,71 +1,85 @@
-import { useAuth } from '@/contexts/AuthContext';
-import DashboardLayout from '@/components/DashboardLayout';
-import { getPapersForHOD } from '@/lib/storage';
-import { Card, CardContent } from '@/components/ui/card';
-import { FileText, CheckCircle } from 'lucide-react';
-import { Link } from 'react-router-dom';
-import StatusBadge from '@/components/StatusBadge';
+// frontend/src/pages/PendingApproval.tsx
+import { useAuth } from "@/contexts/AuthContext";
+import DashboardLayout from "@/components/DashboardLayout";
+import { useEffect, useState } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { FileText } from "lucide-react";
+import { Link } from "react-router-dom";
+import StatusBadge from "@/components/StatusBadge";
+
+interface Paper {
+  _id: string;
+  courseCode: string;
+  courseName: string;
+  year: string;
+  semester: string;
+  paperType: "exam" | "assessment";
+  status: string;
+  lecturerName: string;
+  createdAt: string;
+}
 
 const PendingApproval = () => {
-  const { user } = useAuth();
-  const allPapers = user ? getPapersForHOD(user.department) : [];
-  const pendingPapers = allPapers.filter(p => p.status === 'pending_approval');
+  const { user, token } = useAuth();
+  const [papers, setPapers] = useState<Paper[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user?.id || !token) return;
+
+    const fetchPendingApproval = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/papers/pending-approval/${user.id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        const data = await res.json();
+        setPapers(Array.isArray(data) ? data : []);
+      } catch (err: any) {
+        setError(err.message || "Failed to fetch papers");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPendingApproval();
+  }, [user, token]);
+
+  if (!user) return <DashboardLayout><div className="text-center py-12">Loading user info...</div></DashboardLayout>;
 
   return (
     <DashboardLayout>
       <div className="space-y-6 animate-fade-in">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground">Pending Approval</h1>
-          <p className="text-muted-foreground mt-1">Papers awaiting your final approval</p>
-        </div>
+        <h1 className="text-3xl font-bold text-foreground">Pending Approval</h1>
+        {loading && <p className="text-muted-foreground py-6">Loading papers...</p>}
+        {error && <p className="text-red-500">{error}</p>}
+        {!loading && papers.length === 0 && <p className="text-muted-foreground py-6">No papers pending approval.</p>}
 
-        {pendingPapers.length === 0 ? (
-          <Card>
-            <CardContent className="text-center py-12">
-              <CheckCircle className="w-12 h-12 mx-auto mb-4 text-success/50" />
-              <h3 className="text-lg font-medium mb-2">All caught up!</h3>
-              <p className="text-muted-foreground">No papers pending approval at the moment</p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid gap-4">
-            {pendingPapers.map((paper) => (
-              <Link key={paper.id} to={`/dashboard/approval/${paper.id}`}>
-                <Card className="hover:shadow-md transition-shadow cursor-pointer">
-                  <CardContent className="p-6">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start gap-4">
-                        <div className="w-12 h-12 rounded-lg bg-warning/10 flex items-center justify-center">
-                          <FileText className="w-6 h-6 text-warning" />
-                        </div>
-                        <div>
-                          <h3 className="font-semibold text-lg">
-                            {paper.courseCode} - {paper.courseName}
-                          </h3>
-                          <p className="text-sm text-muted-foreground mt-1">
-                            {paper.year} • {paper.semester} • {paper.paperType === 'exam' ? 'Examination' : 'Assessment'}
-                          </p>
-                          <p className="text-sm text-muted-foreground">
-                            Lecturer: {paper.lecturerName} | Examiner: {paper.examinerName || 'N/A'}
-                          </p>
-                          <div className="flex items-center gap-3 mt-3">
-                            <StatusBadge status={paper.status} />
-                            <span className="text-xs text-muted-foreground">
-                              {paper.signatures.length} signatures
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(paper.updatedAt).toLocaleDateString()}
-                      </span>
+        <div className="grid gap-4">
+          {papers.map(p => (
+            <Link key={p._id} to={`/dashboard/approval/${p._id}`}>
+              <Card className="hover:shadow-md transition-shadow cursor-pointer">
+                <CardContent className="p-6 flex justify-between items-start">
+                  <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center">
+                      <FileText className="w-6 h-6 text-primary" />
                     </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            ))}
-          </div>
-        )}
+                    <div>
+                      <h3 className="font-semibold text-lg">{p.courseCode} - {p.courseName}</h3>
+                      <p className="text-sm text-muted-foreground mt-1">{p.year} • {p.semester} • {p.paperType === "exam" ? "Examination" : "Assessment"}</p>
+                      <p className="text-sm text-muted-foreground">Submitted by {p.lecturerName}</p>
+                      <div className="mt-3"><StatusBadge status={p.status} /></div>
+                    </div>
+                  </div>
+                  <span className="text-xs text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</span>
+                </CardContent>
+              </Card>
+            </Link>
+          ))}
+        </div>
       </div>
     </DashboardLayout>
   );

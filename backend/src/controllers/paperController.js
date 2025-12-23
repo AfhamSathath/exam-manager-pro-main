@@ -1,148 +1,169 @@
 import Paper from "../models/paperModel.js";
-import multer from "multer";
-import path from "path";
 import fs from "fs";
 
 // -----------------------------
-// Multer setup for PDF uploads
-// -----------------------------
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = "./uploads/papers";
-    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `${file.fieldname}-${uniqueSuffix}${path.extname(file.originalname)}`);
-  },
-});
-
-export const upload = multer({
-  storage,
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype !== "application/pdf") {
-      return cb(new Error("Only PDF files are allowed"));
-    }
-    cb(null, true);
-  },
-});
-
-// -----------------------------
-// Create a new paper
+// Create Paper (draft)
 // -----------------------------
 export const createPaper = async (req, res) => {
   try {
-    const { year, semester, courseCode, courseName, paperType, department, lecturerId, lecturerName, status } = req.body;
+    if (!req.file) return res.status(400).json({ message: "PDF required" });
 
-    if (!year || !semester || !courseCode || !courseName || !paperType || !lecturerId || !req.file) {
-      return res.status(400).json({ message: "Missing required fields or PDF file" });
-    }
+    const { year, semester, courseName, paperType } = req.body;
+    const pdfUrl = req.file.path.replace(/\\/g, "/");
 
-    const paper = new Paper({
+    const paper = await Paper.create({
       year,
       semester,
-      courseCode,
       courseName,
       paperType,
-      department,
-      lecturerId,
-      lecturerName,
-      status,
-      currentVersion: 1,
-      signatures: [],
-      pdfPath: req.file.path, // store file path
+      pdfUrl,
+      status: "draft",
     });
 
-    await paper.save();
     res.status(201).json(paper);
-  } catch (error) {
-    console.error("Error creating paper:", error);
-    res.status(500).json({ message: "Failed to create paper", error: error.message });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
   }
 };
 
 // -----------------------------
-// Get all papers
-// Optional: filter by lecturerId
+// Submit Paper (draft → pending_moderation)
+// -----------------------------
+export const submitPaper = async (req, res) => {
+  try {
+    const paper = await Paper.findById(req.params.id);
+    if (!paper) return res.status(404).json({ message: "Paper not found" });
+
+    if (!["draft", "revision_required"].includes(paper.status))
+      return res.status(400).json({ message: `Cannot submit paper in status '${paper.status}'` });
+
+    paper.status = "pending_moderation";
+    await paper.save();
+    res.json({ message: "Submitted for moderation", paper });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// -----------------------------
+// Update Paper
+// -----------------------------
+export const updatePaper = async (req, res) => {
+  try {
+    const paper = await Paper.findById(req.params.id);
+    if (!paper) return res.status(404).json({ message: "Paper not found" });
+
+    const { year, semester, courseName, paperType } = req.body;
+
+    if (req.file && paper.pdfUrl && fs.existsSync(paper.pdfUrl)) fs.unlinkSync(paper.pdfUrl);
+    if (req.file) paper.pdfUrl = req.file.path.replace(/\\/g, "/");
+
+    paper.year = year || paper.year;
+    paper.semester = semester || paper.semester;
+    paper.courseName = courseName || paper.courseName;
+    paper.paperType = paperType || paper.paperType;
+
+    const updated = await paper.save();
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+};
+
+// -----------------------------
+// Delete Paper
+// -----------------------------
+export const deletePaper = async (req, res) => {
+  try {
+    const paper = await Paper.findById(req.params.id);
+    if (!paper) return res.status(404).json({ message: "Paper not found" });
+
+    if (paper.pdfUrl && fs.existsSync(paper.pdfUrl)) fs.unlinkSync(paper.pdfUrl);
+    await paper.deleteOne();
+    res.json({ message: "Deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// -----------------------------
+// Get All / Get by ID
 // -----------------------------
 export const getAllPapers = async (req, res) => {
   try {
-    const { lecturerId } = req.query;
-    let query = {};
-
-    if (lecturerId) query.lecturerId = lecturerId;
-
-    const papers = await Paper.find(query).sort({ createdAt: -1 });
-    res.status(200).json(papers);
-  } catch (error) {
-    console.error("Error fetching papers:", error);
-    res.status(500).json({ message: "Failed to fetch papers", error: error.message });
+    const papers = await Paper.find().sort({ createdAt: -1 });
+    res.json(papers);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 };
 
-// -----------------------------
-// Get a single paper by ID
-// -----------------------------
 export const getPaperById = async (req, res) => {
   try {
     const paper = await Paper.findById(req.params.id);
     if (!paper) return res.status(404).json({ message: "Paper not found" });
-    res.status(200).json(paper);
-  } catch (error) {
-    console.error("Error fetching paper:", error);
-    res.status(500).json({ message: "Failed to fetch paper", error: error.message });
+    res.json(paper);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 };
 
 // -----------------------------
-// Update a paper by ID
+// Examiner moderates paper (pending_moderation → revision_required / pending_approval)
 // -----------------------------
-export const updatePaper = async (req, res) => {
+export const examinerModerate = async (req, res) => {
   try {
-    const updatedPaper = await Paper.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    const paper = await Paper.findById(req.params.id);
+    if (!paper) return res.status(404).json({ message: "Paper not found" });
 
-    if (!updatedPaper) return res.status(404).json({ message: "Paper not found" });
-    res.status(200).json(updatedPaper);
-  } catch (error) {
-    console.error("Error updating paper:", error);
-    res.status(400).json({ message: "Failed to update paper", error: error.message });
+    const { action } = req.body; // "revision" or "approve"
+
+    if (paper.status !== "pending_moderation")
+      return res.status(400).json({ message: "Cannot moderate this paper" });
+
+    if (action === "revision") paper.status = "revision_required";
+    else if (action === "approve") paper.status = "pending_approval";
+    else return res.status(400).json({ message: "Invalid action" });
+
+    await paper.save();
+    res.json({ message: "Paper moderated", paper });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 };
 
 // -----------------------------
-// Delete a paper by ID
+// HOD approves paper (pending_approval → approved)
 // -----------------------------
-export const deletePaper = async (req, res) => {
+export const hodApprove = async (req, res) => {
   try {
-    const deletedPaper = await Paper.findByIdAndDelete(req.params.id);
-    if (!deletedPaper) return res.status(404).json({ message: "Paper not found" });
+    const paper = await Paper.findById(req.params.id);
+    if (!paper) return res.status(404).json({ message: "Paper not found" });
 
-    // Remove PDF file from server
-    if (deletedPaper.pdfPath && fs.existsSync(deletedPaper.pdfPath)) {
-      fs.unlinkSync(deletedPaper.pdfPath);
-    }
+    if (paper.status !== "pending_approval") return res.status(400).json({ message: "Cannot approve this paper" });
 
-    res.status(200).json({ message: "Paper deleted successfully" });
-  } catch (error) {
-    console.error("Error deleting paper:", error);
-    res.status(500).json({ message: "Failed to delete paper", error: error.message });
+    paper.status = "approved";
+    await paper.save();
+    res.json({ message: "HOD approved", paper });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 };
 
 // -----------------------------
-// Get papers by lecturer ID
+// Mark paper as printed (approved → printed)
 // -----------------------------
-export const getPapersByLecturer = async (req, res) => {
-  const { id } = req.params;
+export const markAsPrinted = async (req, res) => {
   try {
-    const papers = await Paper.find({ lecturerId: id }).sort({ createdAt: -1 });
-    res.status(200).json(papers);
-  } catch (error) {
-    console.error("Error fetching lecturer papers:", error);
-    res.status(500).json({ message: "Failed to fetch papers", error: error.message });
+    const paper = await Paper.findById(req.params.id);
+    if (!paper) return res.status(404).json({ message: "Paper not found" });
+
+    if (paper.status !== "approved") return res.status(400).json({ message: "Only approved papers can be printed" });
+
+    paper.status = "printed";
+    await paper.save();
+    res.json({ message: "Paper marked as printed", paper });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 };
